@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stretch Sales Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- iOS full-screen settings -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Stretch Tracker" />
+  <!-- SheetJS for real Excel (.xlsx) export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+    body { margin: 0; background: #f5f5f7; }
+    .app { max-width: 1000px; margin: 0 auto; padding: 16px; }
+    header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+    h1 { font-size: 1.5rem; margin: 0; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:16px; }
+    .card { background:#fff; border-radius:12px; padding:10px 12px; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
+    .card-title { font-size:0.8rem; color:#777; }
+    .card-value { font-size:1.1rem; font-weight:600; margin-top:4px; }
+    .section-title { font-weight:600; margin:16px 0 8px; }
+    form { background:#fff; border-radius:12px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:16px; }
+    label { display:block; font-size:0.8rem; margin-bottom:4px; color:#555; }
+    input, textarea, select { width:100%; padding:8px; border-radius:8px; border:1px solid #ccc; font-size:0.9rem; box-sizing:border-box; margin-bottom:8px; }
+    textarea { resize:vertical; min-height:60px; }
+    button { border-radius:999px; border:none; padding:10px 16px; font-size:0.9rem; font-weight:600; cursor:pointer; }
+    .btn-primary { background:#007aff; color:#fff; }
+    .btn-secondary { background:#e5e5ea; color:#111; }
+    .btn-block { width:100%; }
+    .btn-primary:active, .btn-secondary:active { opacity:0.8; }
+    .error { color:#d00; font-size:0.8rem; margin-bottom:4px; }
+    .table-container { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.1); padding:8px; overflow-x:auto; margin-bottom:12px; }
+    table { width:100%; border-collapse:collapse; font-size:0.8rem; }
+    th, td { padding:6px; text-align:left; border-bottom:1px solid #eee; white-space:nowrap; }
+    th { background:#fafafa; font-weight:600; }
+    .amount { text-align:right; font-weight:600; }
+    .empty { text-align:center; color:#777; padding:10px 0; }
+    .small-text { font-size:0.75rem; color:#777; margin-top:6px; text-align:center; }
+    .filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin-bottom:8px; }
+    .filters-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+
+    /* Notes modal */
+    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.4); display:none; align-items:center; justify-content:center; z-index:1000; }
+    .modal { background:#fff; border-radius:12px; max-width:400px; width:90%; padding:16px; box-shadow:0 10px 25px rgba(0,0,0,0.2); }
+    .modal-header { font-weight:600; margin-bottom:8px; }
+    .modal-body { font-size:0.85rem; max-height:50vh; overflow-y:auto; white-space:pre-wrap; }
+    .modal-footer { margin-top:12px; text-align:right; }
+    .btn-small { padding:4px 8px; font-size:0.75rem; border-radius:999px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Stretch Sales Tracker</h1>
+    </header>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-title">Revenue (this year, filtered)</div>
+        <div class="card-value" id="totalRevenue">$0.00</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Location Fees (this year, filtered)</div>
+        <div class="card-value" id="totalFees">$0.00</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Net Profit (this year, filtered)</div>
+        <div class="card-value" id="netProfit">$0.00</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Sessions / Hours (this year)</div>
+        <div class="card-value" id="sessionsHours">0 / 0.0h</div>
+      </div>
+    </div>
+
+    <div class="section-title">Filters / Reports (current year only)</div>
+    <div class="filters">
+      <div>
+        <label for="fromDate">From date (within this year)</label>
+        <input type="date" id="fromDate" />
+      </div>
+      <div>
+        <label for="toDate">To date (within this year)</label>
+        <input type="date" id="toDate" />
+      </div>
+      <div>
+        <label for="filterLocation">Location (optional)</label>
+        <select id="filterLocation">
+          <option value="">All locations</option>
+        </select>
+      </div>
+      <div>
+        <label for="filterClient">Client name (optional)</label>
+        <input type="text" id="filterClient" placeholder="Search client" />
+      </div>
+    </div>
+    <div class="filters-row">
+      <button id="applyFilter" class="btn-secondary">Apply Filter</button>
+      <button id="clearFilter" class="btn-secondary">Clear Filter</button>
+      <button id="exportCsv" class="btn-primary">Export to Excel (.xlsx)</button>
+      <button id="backupJson" class="btn-secondary">Backup to iCloud (JSON)</button>
+      <button id="restoreJson" class="btn-secondary">Restore Backup</button>
+    </div>
+
+    <div class="filters-row">
+      <div style="flex:1; min-width:180px;">
+        <label for="displayMonth">Display month (Sessions & Location Summary)</label>
+        <input type="month" id="displayMonth" />
+      </div>
+    </div>
+
+    <div class="small-text">
+      All summaries are limited to the current calendar year.
+      The tables below use the <strong>selected month</strong>.
+    </div>
+
+    <div class="section-title" id="formTitle">Add Stretch Session</div>
+    <form id="stretchForm">
+      <input type="hidden" id="editingId" value="" />
+      <div class="error" id="amountError" style="display:none;">Please enter a valid price.</div>
+
+      <label for="date">Date</label>
+      <input type="date" id="date" required />
+
+      <label for="client">Client Name</label>
+      <input type="text" id="client" placeholder="Client name" required />
+
+      <label for="location">Location</label>
+      <select id="location" required><!-- options filled by JS --></select>
+
+      <label for="length">Length of Stretch</label>
+      <select id="length" required>
+        <option value="0.5">0.5 hours (30 min)</option>
+        <option value="1">1.0 hours (60 min)</option>
+        <option value="1.5">1.5 hours (90 min)</option>
+        <option value="2">2.0 hours (120 min)</option>
+      </select>
+
+      <label for="price">Price of Stretch</label>
+      <input type="number" step="0.01" id="price" placeholder="0.00" required />
+
+      <label for="notes">Client Notes (optional)</label>
+      <textarea id="notes" placeholder="How they felt, areas of focus, etc."></textarea>
+
+      <button type="submit" class="btn-primary btn-block" id="saveSessionButton">Save Session</button>
+      <button type="button" class="btn-secondary btn-block" id="cancelEditButton" style="display:none; margin-top:6px;">Cancel Edit</button>
+      <div class="small-text">Data is stored on this device only (in your browser). Use Backup to keep a copy in iCloud.</div>
+    </form>
+
+    <div class="section-title">Sessions (selected month, filtered)</div>
+    <div class="table-container">
+      <table id="sessionsTable">
+        <thead>
+          <tr>
+            <th>Date</th><th>Client</th><th>Location</th><th>Length (h)</th>
+            <th class="amount">Price</th><th class="amount">Location Fee</th><th class="amount">Net</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="sessionsBody"></tbody>
+      </table>
+      <div class="empty" id="emptyState">No sessions for this month yet.</div>
+    </div>
+
+    <div class="section-title">Location Summary (selected month, filtered)</div>
+    <div class="table-container">
+      <table id="locationSummaryTable">
+        <thead>
+          <tr>
+            <th>Location</th><th>Sessions</th><th>Hours</th>
+            <th class="amount">Revenue</th><th class="amount">Fees</th><th class="amount">Net</th>
+          </tr>
+        </thead>
+        <tbody id="locationSummaryBody"></tbody>
+      </table>
+      <div class="empty" id="locationSummaryEmpty">No data for selected month filters.</div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="notesModalBackdrop">
+    <div class="modal">
+      <div class="modal-header">Client Notes</div>
+      <div class="modal-body" id="notesModalText"></div>
+      <div class="modal-footer">
+        <button class="btn-secondary btn-small" id="notesModalClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /***** LOCATION PRICING CONFIG *****
+     * Lighthouse Chiropractic: $10 per stretch session, capped at $250/month.
+     *
+     * kind types:
+     *  - "per_session_cap": perSession fee, capped at monthlyCap
+     *  - "flat_monthly": monthlyFee spread across that month's sessions
+     *  - "percent": percent of session price (0.30 = 30%)
+     *  - "none": no fee
+     **********************************/
+    const locationConfigs = {
+      "Lighthouse Chiropractic": {
+        kind: "per_session_cap",
+        perSession: 10,
+        monthlyCap: 250
+      },
+      "Therapy Hub": {
+        kind: "flat_monthly",
+        monthlyFee: 350
+      },
+      "The Picklr": {
+        kind: "percent",
+        percent: 0.30
+      },
+      "Client Home": { kind: "none" },
+      "My House / Office": { kind: "none" },
+      "Other": { kind: "none" }
+    };
+
+    const locations = Object.keys(locationConfigs);
+    const NOW = new Date();
+    const CURRENT_YEAR = NOW.getFullYear();
+    const CURRENT_MONTH = NOW.getMonth();
+
+    let sessions = [];
+    let activeFilters = { fromDate: null, toDate: null, location: "", client: "" };
+
+    // --- SAFE STORAGE WRAPPER ---
+    function safeGetItem(key){ try { return localStorage.getItem(key); } catch(e){ return null; } }
+    function safeSetItem(key,val){ try { localStorage.setItem(key,val); return true; } catch(e){ return false; } }
+
+    function loadSessions() {
+      const saved = safeGetItem("stretchSessions_v2");
+      if (saved) { try { sessions = JSON.parse(saved) || []; } catch { sessions = []; } }
+      else {
+        const old = safeGetItem("stretchSessions_v1");
+        if (old) { try { sessions = JSON.parse(old) || []; } catch { sessions = []; } }
+        else sessions = [];
+      }
+    }
+    function saveSessions() {
+      const ok = safeSetItem("stretchSessions_v2", JSON.stringify(sessions));
+      if (!ok) console.warn("Local storage not available; data may not persist.");
+    }
+
+    function formatCurrency(amount) {
+      return amount.toLocaleString(undefined, { style: "currency", currency: "USD" });
+    }
+
+    function computeFeesForAllSessions(allSessions) {
+      const feeMap = {};
+      const groups = {}; // key: location|YYYY-MM -> [sessions]
+
+      allSessions.forEach(s => {
+        const d = new Date(s.date);
+        if (Number.isNaN(d.getTime())) return;
+        const ym = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+        const key = s.location + "|" + ym;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(s);
+      });
+
+      Object.keys(groups).forEach(key => {
+        const [loc] = key.split("|");
+        const cfg = locationConfigs[loc] || { kind: "none" };
+        const groupSessions = groups[key];
+
+        if (cfg.kind === "none") {
+          groupSessions.forEach(s => feeMap[s.id] = 0);
+
+        } else if (cfg.kind === "percent") {
+          groupSessions.forEach(s => {
+            const price = Number(s.price) || 0;
+            feeMap[s.id] = price * (cfg.percent || 0);
+          });
+
+        } else if (cfg.kind === "flat_monthly") {
+          const monthlyFee = cfg.monthlyFee || 0;
+          if (groupSessions.length === 0 || monthlyFee === 0) {
+            groupSessions.forEach(s => feeMap[s.id] = 0);
+          } else {
+            const perSessionFee = monthlyFee / groupSessions.length;
+            groupSessions.forEach(s => feeMap[s.id] = perSessionFee);
+          }
+
+        } else if (cfg.kind === "per_session_cap") {
+          const perSession = cfg.perSession || 0;
+          const cap = cfg.monthlyCap || 0;
+
+          if (groupSessions.length === 0) {
+            return;
+          }
+
+          const baseFees = perSession * groupSessions.length;
+
+          if (cap > 0 && baseFees > cap) {
+            // scale down evenly so the total equals the cap
+            const perSessionEff = cap / groupSessions.length;
+            groupSessions.forEach(s => feeMap[s.id] = perSessionEff);
+          } else {
+            groupSessions.forEach(s => feeMap[s.id] = perSession);
+          }
+        }
+      });
+
+      allSessions.forEach(s => { if (feeMap[s.id] == null) feeMap[s.id] = 0; });
+      return feeMap;
+    }
+
+    function populateLocationDropdowns() {
+      const locationSelect = document.getElementById("location");
+      const filterLocation = document.getElementById("filterLocation");
+
+      locationSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Select a location…";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      locationSelect.appendChild(placeholder);
+
+      locations.forEach(loc => {
+        const opt = document.createElement("option");
+        opt.value = loc;
+        opt.textContent = loc;
+        locationSelect.appendChild(opt);
+      });
+
+      filterLocation.innerHTML = "";
+      const allOpt = document.createElement("option");
+      allOpt.value = "";
+      allOpt.textContent = "All locations";
+      filterLocation.appendChild(allOpt);
+
+      locations.forEach(loc => {
+        const opt = document.createElement("option");
+        opt.value = loc;
+        opt.textContent = loc;
+        filterLocation.appendChild(opt);
+      });
+    }
+
+    function syncFiltersFromUI() {
+      activeFilters.fromDate = document.getElementById("fromDate").value || null;
+      activeFilters.toDate = document.getElementById("toDate").value || null;
+      activeFilters.location = document.getElementById("filterLocation").value;
+      activeFilters.client = document.getElementById("filterClient").value || "";
+    }
+
+    function applyFilters() {
+      const from = activeFilters.fromDate ? new Date(activeFilters.fromDate) : null;
+      const to = activeFilters.toDate ? new Date(activeFilters.toDate) : null;
+      const loc = activeFilters.location;
+      const client = activeFilters.client.toLowerCase().trim();
+
+      return sessions.filter(s => {
+        const d = new Date(s.date);
+        if (Number.isNaN(d.getTime())) return false;
+        if (d.getFullYear() !== CURRENT_YEAR) return false;
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+        if (loc && s.location !== loc) return false;
+        if (client && !s.client.toLowerCase().includes(client)) return false;
+        return true;
+      });
+    }
+
+    function updateSummary(filtered, feeMap) {
+      let revenue = 0, fees = 0, hours = 0;
+      filtered.forEach(s => {
+        revenue += (Number(s.price) || 0);
+        fees += (Number(feeMap[s.id]) || 0);
+        hours += (Number(s.lengthHours) || 0);
+      });
+      const net = revenue - fees;
+      document.getElementById("totalRevenue").textContent = formatCurrency(revenue);
+      document.getElementById("totalFees").textContent = formatCurrency(fees);
+      document.getElementById("netProfit").textContent = formatCurrency(net);
+      document.getElementById("sessionsHours").textContent = filtered.length + " / " + hours.toFixed(1) + "h";
+    }
+
+    function openNotesModal(text) {
+      document.getElementById("notesModalText").textContent = text || "(No notes)";
+      document.getElementById("notesModalBackdrop").style.display = "flex";
+    }
+    function closeNotesModal() {
+      document.getElementById("notesModalBackdrop").style.display = "none";
+    }
+
+    function getSelectedMonthYear() {
+      const monthInput = document.getElementById("displayMonth");
+      if (!monthInput || !monthInput.value) return { year: CURRENT_YEAR, month: CURRENT_MONTH };
+      const parts = monthInput.value.split("-");
+      if (parts.length !== 2) return { year: CURRENT_YEAR, month: CURRENT_MONTH };
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      if (isNaN(year) || isNaN(month)) return { year: CURRENT_YEAR, month: CURRENT_MONTH };
+      return { year, month };
+    }
+
+    function renderTable(filtered, feeMap) {
+      const body = document.getElementById("sessionsBody");
+      const empty = document.getElementById("emptyState");
+      body.innerHTML = "";
+
+      if (filtered.length === 0) { empty.style.display = "block"; return; }
+      empty.style.display = "none";
+
+      const sorted = [...filtered].sort((a,b) => b.date.localeCompare(a.date));
+      sorted.forEach(s => {
+        const tr = document.createElement("tr");
+        const price = Number(s.price) || 0;
+        const fee = Number(feeMap[s.id]) || 0;
+        const net = price - fee;
+
+        const td = (txt, cls) => {
+          const el = document.createElement("td");
+          if (cls) el.className = cls;
+          el.textContent = txt;
+          return el;
+        };
+
+        tr.appendChild(td(s.date));
+        tr.appendChild(td(s.client));
+        tr.appendChild(td(s.location));
+        tr.appendChild(td((Number(s.lengthHours) || 0).toFixed(1)));
+        tr.appendChild(td(formatCurrency(price), "amount"));
+        tr.appendChild(td(formatCurrency(fee), "amount"));
+        tr.appendChild(td(formatCurrency(net), "amount"));
+
+        const actionsTd = document.createElement("td");
+
+        const editBtn = document.createElement("button");
+        editBtn.className = "btn-secondary btn-small";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", () => startEditSession(s.id));
+        actionsTd.appendChild(editBtn);
+
+        const delBtn = document.createElement("button");
+        delBtn.className = "btn-secondary btn-small";
+        delBtn.style.background = "#f97373";
+        delBtn.style.color = "#111";
+        delBtn.style.marginLeft = "4px";
+        delBtn.textContent = "Delete";
+        delBtn.addEventListener("click", () => deleteSession(s.id));
+        actionsTd.appendChild(delBtn);
+
+        if (s.notes && s.notes.trim() !== "") {
+          const notesBtn = document.createElement("button");
+          notesBtn.className = "btn-secondary btn-small";
+          notesBtn.style.marginLeft = "4px";
+          notesBtn.textContent = "Notes";
+          notesBtn.addEventListener("click", () => openNotesModal(s.notes));
+          actionsTd.appendChild(notesBtn);
+        }
+
+        tr.appendChild(actionsTd);
+        body.appendChild(tr);
+      });
+    }
+
+    function renderLocationSummary(filtered, feeMap) {
+      const body = document.getElementById("locationSummaryBody");
+      const empty = document.getElementById("locationSummaryEmpty");
+      body.innerHTML = "";
+
+      if (filtered.length === 0) { empty.style.display = "block"; return; }
+      empty.style.display = "none";
+
+      const summary = {};
+      filtered.forEach(s => {
+        const loc = s.location || "Unknown";
+        if (!summary[loc]) summary[loc] = { sessions:0, hours:0, revenue:0, fees:0 };
+        summary[loc].sessions += 1;
+        summary[loc].hours += (Number(s.lengthHours) || 0);
+        summary[loc].revenue += (Number(s.price) || 0);
+        summary[loc].fees += (Number(feeMap[s.id]) || 0);
+      });
+
+      Object.keys(summary).sort().forEach(loc => {
+        const row = summary[loc];
+        const net = row.revenue - row.fees;
+
+        const tr = document.createElement("tr");
+        const mk = (txt, cls) => { const td = document.createElement("td"); if (cls) td.className = cls; td.textContent = txt; return td; };
+
+        tr.appendChild(mk(loc));
+        tr.appendChild(mk(String(row.sessions)));
+        tr.appendChild(mk(row.hours.toFixed(1)));
+        tr.appendChild(mk(formatCurrency(row.revenue), "amount"));
+        tr.appendChild(mk(formatCurrency(row.fees), "amount"));
+        tr.appendChild(mk(formatCurrency(net), "amount"));
+
+        body.appendChild(tr);
+      });
+    }
+
+    function downloadBackup() {
+      const payload = { version: 2, exportedAt: new Date().toISOString(), sessions };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "stretch_backup_" + new Date().toISOString().slice(0,10) + ".json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function triggerRestore() {
+      const input = document.getElementById("restoreFileInput");
+      if (input) input.click();
+    }
+
+    function exportToXlsx() {
+      const feeMap = computeFeesForAllSessions(sessions);
+      const filtered = applyFilters();
+      if (filtered.length === 0) { alert("No sessions to export for the current filters."); return; }
+
+      const locFilter = document.getElementById("filterLocation").value;
+      const onlyPicklr = (locFilter === "The Picklr");
+
+      let headers;
+      const rows = [];
+      if (onlyPicklr) headers = ["Date","Client","Location","LengthHours","Price","LocationFee"];
+      else headers = ["Date","Client","Location","LengthHours","Price","LocationFee","Net","Notes"];
+
+      filtered.sort((a,b) => a.date.localeCompare(b.date));
+
+      filtered.forEach(s => {
+        const price = Number(s.price) || 0;
+        const fee = Number(feeMap[s.id]) || 0;
+        const net = price - fee;
+        const hours = Number(s.lengthHours) || 0;
+        const isPicklrRow = s.location === "The Picklr";
+
+        if (onlyPicklr) {
+          rows.push([s.date, s.client, s.location, hours, price, fee]);
+        } else {
+          rows.push([s.date, s.client, s.location, hours, price, fee, isPicklrRow ? null : net, isPicklrRow ? "" : (s.notes || "").replace(/\r?\n/g," ")]);
+        }
+      });
+
+      const totalRows = filtered.length + 1;
+      const lenRange = `D2:D${totalRows}`;
+      const priceRange = `E2:E${totalRows}`;
+      const feeRange = `F2:F${totalRows}`;
+      const netRange = onlyPicklr ? null : `G2:G${totalRows}`;
+
+      let sumRow;
+      if (onlyPicklr) sumRow = ["","","TOTALS:", { f:`SUM(${lenRange})` }, { f:`SUM(${priceRange})` }, { f:`SUM(${feeRange})` }];
+      else sumRow = ["","","TOTALS:", { f:`SUM(${lenRange})` }, { f:`SUM(${priceRange})` }, { f:`SUM(${feeRange})` }, netRange ? { f:`SUM(${netRange})` } : "", ""];
+      rows.push(sumRow);
+
+      const aoa = [headers, ...rows];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+      const rowCount = aoa.length;
+      if (onlyPicklr) {
+        for (let r=2; r<=rowCount; r++) {
+          if (ws['D'+r]) ws['D'+r].z = '0.00';
+          if (ws['E'+r]) ws['E'+r].z = '"$"#,##0.00';
+          if (ws['F'+r]) ws['F'+r].z = '"$"#,##0.00';
+        }
+      } else {
+        for (let r=2; r<=rowCount; r++) {
+          if (ws['D'+r]) ws['D'+r].z = '0.00';
+          if (ws['E'+r]) ws['E'+r].z = '"$"#,##0.00';
+          if (ws['F'+r]) ws['F'+r].z = '"$"#,##0.00';
+          const netAoaVal = aoa[r-1] ? aoa[r-1][6] : null;
+          if (ws['G'+r] && (typeof netAoaVal === 'number' || (netAoaVal && netAoaVal.f))) ws['G'+r].z = '"$"#,##0.00';
+        }
+      }
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sessions");
+      XLSX.writeFile(wb, `stretch_sessions_${new Date().toISOString().slice(0,10)}.xlsx`);
+    }
+
+    // ----- EDIT / DELETE HELPERS -----
+    function resetForm() {
+      document.getElementById("editingId").value = "";
+      document.getElementById("formTitle").textContent = "Add Stretch Session";
+      document.getElementById("saveSessionButton").textContent = "Save Session";
+      document.getElementById("cancelEditButton").style.display = "none";
+      document.getElementById("amountError").style.display = "none";
+      const locSel = document.getElementById("location");
+      if (locSel && !locSel.value) locSel.selectedIndex = 0;
+    }
+
+    function startEditSession(sessionId) {
+      const idx = sessions.findIndex(s => String(s.id) === String(sessionId));
+      if (idx === -1) return;
+      const s = sessions[idx];
+
+      document.getElementById("editingId").value = s.id;
+      document.getElementById("formTitle").textContent = "Edit Stretch Session";
+      document.getElementById("saveSessionButton").textContent = "Update Session";
+      document.getElementById("cancelEditButton").style.display = "block";
+
+      document.getElementById("date").value = s.date;
+      document.getElementById("client").value = s.client || "";
+      document.getElementById("location").value = s.location || "";
+      document.getElementById("length").value = s.lengthHours != null ? String(s.lengthHours) : "1";
+      document.getElementById("price").value = s.price != null ? String(s.price) : "";
+      document.getElementById("notes").value = s.notes || "";
+    }
+
+    function deleteSession(sessionId) {
+      const idx = sessions.findIndex(s => String(s.id) === String(sessionId));
+      if (idx === -1) return;
+      const s = sessions[idx];
+      const ok = confirm(`Delete session on ${s.date} for ${s.client} at ${s.location}?`);
+      if (!ok) return;
+      sessions.splice(idx, 1);
+      saveSessions();
+      refreshUI();
+      resetForm();
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      // populate dropdowns first
+      populateLocationDropdowns();
+
+      loadSessions();
+
+      document.getElementById("date").value = new Date().toISOString().slice(0,10);
+
+      const monthInput = document.getElementById("displayMonth");
+      if (monthInput) {
+        const monthStr = String(CURRENT_MONTH + 1).padStart(2, "0");
+        monthInput.value = `${CURRENT_YEAR}-${monthStr}`;
+        monthInput.addEventListener("change", () => refreshUI());
+      }
+
+      const form = document.getElementById("stretchForm");
+      const amountError = document.getElementById("amountError");
+
+      form.addEventListener("submit", e => {
+        e.preventDefault();
+        amountError.style.display = "none";
+
+        const editingId = document.getElementById("editingId").value;
+
+        const date = document.getElementById("date").value;
+        const client = document.getElementById("client").value.trim();
+        const location = document.getElementById("location").value;
+        const lengthHours = parseFloat(document.getElementById("length").value);
+        const priceRaw = document.getElementById("price").value.trim();
+        const notes = document.getElementById("notes").value.trim();
+
+        if (!priceRaw || isNaN(parseFloat(priceRaw))) { amountError.style.display = "block"; return; }
+        const price = parseFloat(priceRaw);
+
+        if (editingId) {
+          const idx = sessions.findIndex(s => String(s.id) === String(editingId));
+          if (idx !== -1) sessions[idx] = { ...sessions[idx], date, client, location, lengthHours, price, notes };
+          else sessions.push({ id: Date.now(), date, client, location, lengthHours, price, notes });
+        } else {
+          sessions.push({ id: Date.now(), date, client, location, lengthHours, price, notes });
+        }
+
+        saveSessions();
+        resetForm();
+        document.getElementById("client").value = "";
+        document.getElementById("price").value = "";
+        document.getElementById("notes").value = "";
+        refreshUI();
+      });
+
+      document.getElementById("cancelEditButton").addEventListener("click", () => {
+        resetForm();
+        document.getElementById("client").value = "";
+        document.getElementById("price").value = "";
+        document.getElementById("notes").value = "";
+      });
+
+      document.getElementById("applyFilter").addEventListener("click", () => { syncFiltersFromUI(); refreshUI(); });
+
+      document.getElementById("clearFilter").addEventListener("click", () => {
+        document.getElementById("fromDate").value = "";
+        document.getElementById("toDate").value = "";
+        document.getElementById("filterLocation").value = "";
+        document.getElementById("filterClient").value = "";
+        activeFilters = { fromDate: null, toDate: null, location: "", client: "" };
+        refreshUI();
+      });
+
+      document.getElementById("exportCsv").addEventListener("click", () => { syncFiltersFromUI(); exportToXlsx(); });
+
+      const backupBtn = document.getElementById("backupJson");
+      if (backupBtn) backupBtn.addEventListener("click", downloadBackup);
+
+      const restoreBtn = document.getElementById("restoreJson");
+      const restoreInput = document.getElementById("restoreFileInput");
+      if (restoreBtn && restoreInput) {
+        restoreBtn.addEventListener("click", triggerRestore);
+        restoreInput.addEventListener("change", (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            try {
+              const data = JSON.parse(ev.target.result);
+              if (data && Array.isArray(data.sessions)) sessions = data.sessions;
+              else if (Array.isArray(data)) sessions = data;
+              else { alert("Backup file format not recognized."); return; }
+              saveSessions();
+              refreshUI();
+              resetForm();
+              alert("Backup restored successfully.");
+            } catch (err) {
+              console.error(err);
+              alert("Error reading backup file.");
+            }
+          };
+          reader.readAsText(file);
+          e.target.value = "";
+        });
+      }
+
+      document.getElementById("notesModalClose").addEventListener("click", closeNotesModal);
+      document.getElementById("notesModalBackdrop").addEventListener("click", (e) => {
+        if (e.target.id === "notesModalBackdrop") closeNotesModal();
+      });
+
+      refreshUI();
+    });
+
+    function refreshUI() {
+      const feeMap = computeFeesForAllSessions(sessions);
+      const filteredYear = applyFilters();
+
+      const { year: displayYear, month: displayMonthIndex } = getSelectedMonthYear();
+      const monthFiltered = filteredYear.filter(s => {
+        const d = new Date(s.date);
+        if (Number.isNaN(d.getTime())) return false;
+        return d.getFullYear() === displayYear && d.getMonth() === displayMonthIndex;
+      });
+
+      renderTable(monthFiltered, feeMap);
+      renderLocationSummary(monthFiltered, feeMap);
+      updateSummary(filteredYear, feeMap);
+    }
+  </script>
+
+  <input type="file" id="restoreFileInput" accept="application/json" style="display:none" />
+</body>
+</html>
